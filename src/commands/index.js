@@ -219,64 +219,47 @@ addCmd("logs", true, async (sock, msg) => {
 // ─── .vv (View Once Recovery) ─────────────────────────────────
 addCmd("vv", false, async (sock, msg, args, messageCache) => {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
-  const quoted = ctx?.quotedMessage;
 
-  if (!quoted) {
-    await sock.sendMessage(msg.key.remoteJid, {
+  if (!ctx?.quotedMessage) {
+    return sock.sendMessage(msg.key.remoteJid, {
       text: `❌ Kisi View Once message par reply karke *${config.PREFIX}vv* likhein.`
     }, { quoted: msg });
-    return;
   }
 
-  const type = Object.keys(quoted)[0];
+  const q = ctx.quotedMessage;
 
-  // ── Proper ViewOnce detection ──
-  const isViewOnce =
-    type === "viewOnceMessage" ||
-    type === "viewOnceMessageV2";
+  // ── Extract ViewOnce safely ──
+  const viewOnce =
+    q.viewOnceMessage?.message ||
+    q.viewOnceMessageV2?.message;
 
-  if (!isViewOnce) {
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: "❌ Yeh message View Once nahi hai."
+  if (!viewOnce) {
+    return sock.sendMessage(msg.key.remoteJid, {
+      text: "❌ Yeh View Once media nahi hai."
     }, { quoted: msg });
-    return;
   }
 
   try {
-    // ── IMPORTANT FIX: unwrap correct message ──
-    const innerMsg =
-      quoted.viewOnceMessage?.message ||
-      quoted.viewOnceMessageV2?.message;
-
-    if (!innerMsg) {
-      await sock.sendMessage(msg.key.remoteJid, {
-        text: "❌ View Once media extract nahi ho saki."
-      }, { quoted: msg });
-      return;
-    }
-
-    // ── Fake message for downloader ──
-    const fakeMsg = {
-      key: msg.key,
-      message: innerMsg,
+    // ── IMPORTANT FIX: rebuild proper message structure ──
+    const fakeQuoted = {
+      key: ctx.stanzaId
+        ? { id: ctx.stanzaId }
+        : msg.key,
+      message: viewOnce,
     };
 
-    const cachedMsg = messageCache.get(ctx.stanzaId);
-    const targetMsg = cachedMsg || fakeMsg;
-
-    const media = await downloadAndSave(sock, targetMsg, "viewonce");
+    const media = await downloadAndSave(sock, fakeQuoted, "viewonce");
 
     if (!media) {
-      await sock.sendMessage(msg.key.remoteJid, {
-        text: "❌ Media download nahi ho saki."
+      return sock.sendMessage(msg.key.remoteJid, {
+        text: "❌ Media download failed (Baileys block)."
       }, { quoted: msg });
-      return;
     }
 
     const requester = (msg.key.participant || msg.key.remoteJid)
       .replace("@s.whatsapp.net", "");
 
-    logger.cmd(`👁️ .vv used by ${requester}`);
+    logger.cmd(`👁️ VV used by ${requester}`);
 
     await sendMedia(
       sock,
@@ -288,9 +271,9 @@ addCmd("vv", false, async (sock, msg, args, messageCache) => {
       msg
     );
 
-  } catch (err) {
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: `❌ Error: ${err.message}`
+  } catch (e) {
+    return sock.sendMessage(msg.key.remoteJid, {
+      text: `❌ Error: ${e.message}`
     }, { quoted: msg });
   }
 });
