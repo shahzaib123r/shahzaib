@@ -223,55 +223,76 @@ addCmd("vv", false, async (sock, msg, args, messageCache) => {
 
   if (!quoted) {
     await sock.sendMessage(msg.key.remoteJid, {
-      text: `❌ Reply to a View Once message first!\nUse: ${config.PREFIX}vv`
+      text: `❌ Kisi View Once message par reply karke *${config.PREFIX}vv* likhein.`
     }, { quoted: msg });
     return;
   }
 
-  const quotedType = getContentType(quoted);
-  const isVO =
-    quotedType === "viewOnceMessage" ||
-    quotedType === "viewOnceMessageV2" ||
-    quoted?.viewOnceMessage ||
-    quoted?.viewOnceMessageV2;
+  const type = Object.keys(quoted)[0];
 
-  if (!isVO) {
+  // ── Proper ViewOnce detection ──
+  const isViewOnce =
+    type === "viewOnceMessage" ||
+    type === "viewOnceMessageV2";
+
+  if (!isViewOnce) {
     await sock.sendMessage(msg.key.remoteJid, {
-      text: "❌ This is not a View Once message."
+      text: "❌ Yeh message View Once nahi hai."
     }, { quoted: msg });
     return;
   }
 
-  const cachedMsg = messageCache.get(ctx.stanzaId);
-  if (!cachedMsg) {
+  try {
+    // ── IMPORTANT FIX: unwrap correct message ──
+    const innerMsg =
+      quoted.viewOnceMessage?.message ||
+      quoted.viewOnceMessageV2?.message;
+
+    if (!innerMsg) {
+      await sock.sendMessage(msg.key.remoteJid, {
+        text: "❌ View Once media extract nahi ho saki."
+      }, { quoted: msg });
+      return;
+    }
+
+    // ── Fake message for downloader ──
+    const fakeMsg = {
+      key: msg.key,
+      message: innerMsg,
+    };
+
+    const cachedMsg = messageCache.get(ctx.stanzaId);
+    const targetMsg = cachedMsg || fakeMsg;
+
+    const media = await downloadAndSave(sock, targetMsg, "viewonce");
+
+    if (!media) {
+      await sock.sendMessage(msg.key.remoteJid, {
+        text: "❌ Media download nahi ho saki."
+      }, { quoted: msg });
+      return;
+    }
+
+    const requester = (msg.key.participant || msg.key.remoteJid)
+      .replace("@s.whatsapp.net", "");
+
+    logger.cmd(`👁️ .vv used by ${requester}`);
+
+    await sendMedia(
+      sock,
+      msg.key.remoteJid,
+      media.buffer,
+      media.mimetype,
+      media.innerType,
+      "👁️ *View Once Recovered*",
+      msg
+    );
+
+  } catch (err) {
     await sock.sendMessage(msg.key.remoteJid, {
-      text: "❌ Media not found in cache."
+      text: `❌ Error: ${err.message}`
     }, { quoted: msg });
-    return;
   }
-
-  const media = await downloadAndSave(sock, cachedMsg, "viewonce");
-  if (!media) {
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: "❌ Failed to download media."
-    }, { quoted: msg });
-    return;
-  }
-
-  const requester = (msg.key.participant || msg.key.remoteJid).replace("@s.whatsapp.net", "");
-
-  logVVRecovery({ requester, chatJid: msg.key.remoteJid, mediaPath: media.filepath });
-  logger.cmd(`👁️ .vv used by ${requester}`);
-
-  await sendMedia(
-    sock,
-    msg.key.remoteJid,
-    media.buffer,
-    media.mimetype,
-    media.innerType,
-    "👁️ VIEW ONCE RECOVERED",
-    msg
-  );
 });
 
 // ─── .sticker ─────────────────────────────────────────────────
